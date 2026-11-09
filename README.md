@@ -1,5 +1,11 @@
 # RenderNames
 
+- updated: it now has a checkbox "Save Changes Globally" which saves your setting overall - so it is not scene dependent but for all blend files.
+  If you uncheck it, it works as before.
+
+<img width="188" height="66" alt="image" src="https://github.com/user-attachments/assets/0841e9f4-0a94-4a1a-bc82-9d91b30236b4" />
+
+
 **Smart render output naming for Blender that actually makes sense.**
 
 Stop manually renaming files. Stop creating folders. Stop losing track of which render is which.
