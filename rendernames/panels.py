@@ -7,7 +7,7 @@
 import bpy
 from bpy.types import Panel
 
-from . import template_engine
+from . import properties, template_engine
 
 
 # ============================================================================
@@ -31,6 +31,10 @@ class RENDERNAMES_PT_main(Panel):
         layout = self.layout
         scene = context.scene
         props = scene.rendernames
+
+        addon_preferences = properties.get_addon_preferences(context)
+        if addon_preferences is not None:
+            layout.prop(addon_preferences, "save_changes_globally")
         
         # Disable UI if not enabled
         layout.active = props.enabled

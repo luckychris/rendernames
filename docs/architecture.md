@@ -121,6 +121,12 @@ This path is determined by `bpy.utils.extension_path_user(__package__)`, which:
 - Is removed when extension is uninstalled
 - Is user-writable on all systems
 
+The **Save Changes Globally** option in the RenderNames panel stores the current
+scene's render naming settings in Blender's add-on preferences. While enabled,
+changes update that user-wide profile, which is applied to every scene when a
+blend file is opened. When disabled, the existing per-blend-file behavior is
+unchanged.
+
 ## Version Compatibility
 
 ### Blender 4.2+

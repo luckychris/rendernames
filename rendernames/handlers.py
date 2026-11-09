@@ -133,9 +133,12 @@ def on_load_post(dummy):
             if scene.rendernames.use_global_settings and first_global_scene is None:
                 first_global_scene = scene
     
+    from . import properties
+    if properties.apply_saved_addon_settings(bpy.context):
+        return
+
     # Initialize global storage from the first global scene
     if first_global_scene is not None:
-        from . import properties
         # Create a mock context
         class MockContext:
             scene = first_global_scene

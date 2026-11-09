@@ -13,7 +13,7 @@ from bpy.props import (
     CollectionProperty,
     PointerProperty,
 )
-from bpy.types import PropertyGroup
+from bpy.types import AddonPreferences, PropertyGroup
 
 
 # ============================================================================
@@ -46,6 +46,24 @@ class RENDERNAMES_GlobalSettings(PropertyGroup):
     include_extension: BoolProperty(default=True)
 
 
+class RENDERNAMES_AddonPreferences(AddonPreferences):
+    """User-level settings shared between Blender projects."""
+
+    bl_idname = __package__
+
+    save_changes_globally: BoolProperty(
+        name="Save Changes Globally",
+        description="Use these RenderNames settings in every opened blend file",
+        default=False,
+        update=lambda self, context: _on_save_changes_globally_changed(self, context),
+    )
+    has_saved_settings: BoolProperty(default=False, options={"HIDDEN"})
+    global_settings: PointerProperty(type=RENDERNAMES_GlobalSettings)
+
+    def draw(self, context):
+        self.layout.prop(self, "save_changes_globally")
+
+
 class RENDERNAMES_Properties(PropertyGroup):
     """Main property group for RenderNames settings."""
     
@@ -56,6 +74,7 @@ class RENDERNAMES_Properties(PropertyGroup):
         name="Enable RenderNames",
         description="Enable smart render naming (disabling uses Blender's default path)",
         default=True,
+        update=lambda self, ctx: _on_addon_setting_changed(self, ctx),
     )
     
     # -------------------------------------------------------------------------
@@ -157,6 +176,7 @@ class RENDERNAMES_Properties(PropertyGroup):
         name="Include Extension",
         description="Automatically append file extension based on output format",
         default=True,
+        update=lambda self, ctx: _on_addon_setting_changed(self, ctx),
     )
     
     # -------------------------------------------------------------------------
@@ -215,17 +235,24 @@ def _on_setting_changed(props, context):
     if presets.is_applying_preset():
         return
     
-    if not props.use_global_settings:
-        return
-    
     if context is None or context.scene is None:
         return
-    
-    # Update the global storage on WindowManager
-    _save_to_global_settings(context)
-    
-    # IMMEDIATELY sync to all other scenes in global mode
-    _sync_global_to_all_scenes(context)
+
+    if props.use_global_settings:
+        # Update the global storage on WindowManager
+        _save_to_global_settings(context)
+
+        # IMMEDIATELY sync to all other scenes in global mode
+        _sync_global_to_all_scenes(context)
+
+    _save_to_addon_preferences(context, props)
+
+
+def _on_addon_setting_changed(props, context):
+    """Persist additional profile fields only when user-wide saving is enabled."""
+    addon_preferences = get_addon_preferences(context)
+    if addon_preferences is not None and addon_preferences.save_changes_globally:
+        _on_setting_changed(props, context)
 
 
 def _update_preview(props, context):
@@ -243,9 +270,11 @@ def _update_preview(props, context):
         props["preview"] = preview_path
         
         # If using global settings and not applying a preset, sync to global and other scenes
-        if props.use_global_settings and not presets.is_applying_preset():
-            _save_to_global_settings(context)
-            _sync_global_to_all_scenes(context)
+        if not presets.is_applying_preset():
+            if props.use_global_settings:
+                _save_to_global_settings(context)
+                _sync_global_to_all_scenes(context)
+            _save_to_addon_preferences(context, props)
 
 
 def _sync_template_from_options(props, context):
@@ -285,6 +314,8 @@ def _sync_template_from_options(props, context):
         props.template = new_template
         # Update preview ONLY if template actually changed
         _update_preview(props, context)
+    else:
+        _save_to_addon_preferences(context, props)
 
 
 def _on_storage_mode_changed(props, context):
@@ -327,6 +358,115 @@ def _get_global_settings(context):
         return wm.rendernames_global
     except Exception:
         return None
+
+
+def get_addon_preferences(context=None):
+    """Return RenderNames user preferences when the extension is registered."""
+    context = context or bpy.context
+    if context is None or context.preferences is None:
+        return None
+
+    addon = context.preferences.addons.get(__package__)
+    return addon.preferences if addon else None
+
+
+def _copy_settings(source, destination):
+    for prop_name in _SYNC_PROPERTIES:
+        if hasattr(source, prop_name) and hasattr(destination, prop_name):
+            setattr(destination, prop_name, getattr(source, prop_name))
+
+
+def _save_to_addon_preferences(context, source_props):
+    """Persist changed scene settings when user-wide saving is enabled."""
+    addon_preferences = get_addon_preferences(context)
+    if (
+        addon_preferences is None
+        or not addon_preferences.save_changes_globally
+    ):
+        return
+
+    from . import presets
+    if presets.is_applying_preset():
+        return
+
+    _copy_settings(source_props, addon_preferences.global_settings)
+    addon_preferences.has_saved_settings = True
+    _sync_addon_preferences_to_scenes(context, source_scene=context.scene)
+
+
+def _sync_addon_preferences_to_scenes(context, source_scene=None):
+    """Apply saved user-wide settings to other scenes in the current file."""
+    addon_preferences = get_addon_preferences(context)
+    if (
+        addon_preferences is None
+        or not addon_preferences.save_changes_globally
+        or not addon_preferences.has_saved_settings
+    ):
+        return
+
+    from . import presets
+    original_flag = presets._applying_preset
+    presets._applying_preset = True
+    try:
+        for scene in bpy.data.scenes:
+            if scene == source_scene or not hasattr(scene, "rendernames"):
+                continue
+            _copy_settings(addon_preferences.global_settings, scene.rendernames)
+    finally:
+        presets._applying_preset = original_flag
+
+
+def _on_save_changes_globally_changed(addon_preferences, context):
+    """Save the current scene as the user-wide profile when enabled."""
+    if not addon_preferences.save_changes_globally:
+        return
+
+    if context is None or context.scene is None:
+        return
+
+    if not hasattr(context.scene, "rendernames"):
+        return
+
+    _save_to_addon_preferences(context, context.scene.rendernames)
+    if context.scene.rendernames.use_global_settings:
+        _save_to_global_settings(context)
+
+
+def apply_saved_addon_settings(context):
+    """Apply the saved user-wide profile to every scene in the loaded file."""
+    addon_preferences = get_addon_preferences(context)
+    if (
+        addon_preferences is None
+        or not addon_preferences.save_changes_globally
+        or not addon_preferences.has_saved_settings
+    ):
+        return False
+
+    from . import presets
+    original_flag = presets._applying_preset
+    presets._applying_preset = True
+    try:
+        for scene in bpy.data.scenes:
+            if hasattr(scene, "rendernames"):
+                _copy_settings(addon_preferences.global_settings, scene.rendernames)
+    finally:
+        presets._applying_preset = original_flag
+
+    first_global_scene = next(
+        (
+            scene for scene in bpy.data.scenes
+            if hasattr(scene, "rendernames") and scene.rendernames.use_global_settings
+        ),
+        None,
+    )
+    if first_global_scene is not None and context.window_manager:
+        class MockContext:
+            scene = first_global_scene
+            window_manager = context.window_manager
+
+        _save_to_global_settings(MockContext())
+
+    return True
 
 
 def _save_to_global_settings(context):
@@ -419,6 +559,7 @@ def get_effective_props(scene):
 _classes = (
     RENDERNAMES_PresetItem,
     RENDERNAMES_GlobalSettings,
+    RENDERNAMES_AddonPreferences,
     RENDERNAMES_Properties,
 )
 
